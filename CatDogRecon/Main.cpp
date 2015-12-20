@@ -21,9 +21,10 @@ const string ASSETS_PATH = "../Assets/";
 const string TRAIN_CAT_PATH = ASSETS_PATH + "cat/";
 const string TRAIN_DOG_PATH = ASSETS_PATH + "dog/";
 const string TEST_PATH = ASSETS_PATH + "test/";
-const int CAT_CLASS = 1;
-const int DOG_CLASS = 2;
+const int CAT_CLASS = 0;
+const int DOG_CLASS = 1;
 const int TRAIN_SIZE = 100; //12500
+const int TEST_SIZE = 12500;
 
 //Vocabulary
 const int SURF_HESSIAN = 400;
@@ -82,12 +83,15 @@ Mat createVocabulary(vector<string> paths)
 		#pragma omp parallel for schedule(dynamic, 3)
 		for (int i = 1; i <= TRAIN_SIZE; i++)
 		{
-			cout << i << endl;
 			vector<KeyPoint> keypoints;
 			Mat descriptors;
 			Mat image = imread(paths[path] + to_string(i) + ".jpg", IMREAD_COLOR);
 			detector.detect(image, keypoints);
 			extractor.compute(image, keypoints, descriptors);
+			//Mat hue;
+			//drawKeypoints(image, keypoints, hue, Scalar::all(-1), DrawMatchesFlags::DEFAULT);
+			//imshow("hue" + i, hue);
+			//waitKey();
 
 			#pragma omp critical
 			{
@@ -115,7 +119,6 @@ void addDataClass(string classPath, int classId, Mat vocabulary, map<int, Mat> &
 	#pragma omp parallel for schedule(dynamic, 3)
 	for (int i = 1; i <= TRAIN_SIZE; i++)
 	{
-		cout << i << endl;
 		vector<KeyPoint> keypoints;
 		Mat responseHist;
 		Mat image = imread(classPath + to_string(i) + ".jpg", IMREAD_COLOR);
@@ -135,20 +138,20 @@ void addDataClass(string classPath, int classId, Mat vocabulary, map<int, Mat> &
 }
 
 CvNormalBayesClassifier computeBayesClassifier(map<int, Mat> data)
-{	
+{
 	//prepare data
-	Mat samples(0, CLUSTER_COUNT * data.size(), CV_32FC1); //why clustercount
-	int label[4] = { 1, -1, -1, -1 };
-	Mat labels(4, 1, CV_32SC1, label);
+	Mat samples;
+	Mat labels;
 
 	map<int, Mat>::iterator it;
 	for (it = data.begin(); it != data.end(); it++)
 	{
-		cout << "1";
-		labels.push_back(it->first);
-		cout << "2";
+		int label = it->first;
+		Mat sample = it->second;
+
+		Mat labelMat = Mat(sample.rows, 1, sample.type(), Scalar(label));
+		labels.push_back(labelMat);
 		samples.push_back(it->second);
-		cout << "3";
 	}
 
 	//train
@@ -190,18 +193,46 @@ int main()
 	cout << GetTickCount() - t << "ms" << endl;
 
 	//Try
-	cout << "Trying" << endl;
-	for (int i = 1; i <= TRAIN_SIZE; i++)
+	cout << "Testing" << endl;
+	string results = "id,label\n";
+
+	Ptr<FeatureDetector> detector = FeatureDetector::create(DETECTOR_TYPE);
+	Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(MATCHER_TYPE);
+	Ptr<DescriptorExtractor> extractor = DescriptorExtractor::create(EXTRACTOR_TYPE);
+
+	BOWImgDescriptorExtractor bowide(extractor, matcher);
+	bowide.setVocabulary(vocabulary);
+
+	for (int i = 1; i <= TEST_SIZE; i++)
 	{
 		Mat image = imread(TEST_PATH + to_string(i) + ".jpg", IMREAD_COLOR);
+		vector<KeyPoint> kp;
+		Mat hst;
+		detector->detect(image, kp);
+		bowide.compute(image, kp, hst);
 
-		int classId = classifier.predict(image);
-		if (classId == CAT_CLASS) cout << "cat" << endl;
-		if (classId == DOG_CLASS) cout << "dog" << endl;
+		int classId;
+		
+		if (hst.rows == 0)
+		{
+			classId = 0;
+		}
+		else
+		{
+			classId = classifier.predict(hst);
+		}
 
-		imshow("image", image);
-		waitKey();
+		results += to_string(i) + "," + to_string(classId) + "\n";
+		//if (classId == CAT_CLASS) ovascoegay += ""
+		//if (classId == DOG_CLASS) cout << "dog" << endl;
+
+
+		//imshow("image", image);
+		//waitKey();
 	}
+
+	ofstream file(ASSETS_PATH + "results.csv");
+	file << results;
 
 	//gg
 	cout << "finish" << endl;
