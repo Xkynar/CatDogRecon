@@ -24,11 +24,17 @@ const string TEST_PATH = ASSETS_PATH + "test/";
 const int CAT_CLASS = 0;
 const int DOG_CLASS = 1;
 const int TRAIN_SIZE = 100; //12500
-const int TEST_SIZE = 12500;
+const int TEST_SIZE = 100;
 
 //Vocabulary
 const int SURF_HESSIAN = 400;
 const int CLUSTER_COUNT = 100; //1000?
+
+//Storage
+const string VOCABULARY_PATH = ASSETS_PATH + "vocabulary.yml";
+const string BAYES_PATH = ASSETS_PATH + "bayes.model";
+const string SVM_PATH = ASSETS_PATH + "svm.model";
+const string RESULTS_PATH = ASSETS_PATH + "results.csv";
 
 //Data
 
@@ -68,7 +74,6 @@ const string MATCHER_TYPE = "BruteForce";
 */
 const string EXTRACTOR_TYPE = "SURF";
 
-
 Mat createVocabulary(vector<string> paths)
 {
 	//Extract train set descriptors and store them
@@ -104,6 +109,22 @@ Mat createVocabulary(vector<string> paths)
 	BOWKMeansTrainer bowTrainer(CLUSTER_COUNT); //clusters
 	bowTrainer.add(trainDescriptors);
 	Mat vocabulary = bowTrainer.cluster();
+
+	FileStorage fs(VOCABULARY_PATH, FileStorage::WRITE);
+	fs << "vocabulary" << vocabulary;
+	fs.release();
+
+	return vocabulary;
+}
+
+Mat loadVocabulary()
+{
+	Mat vocabulary;
+	FileStorage fs(VOCABULARY_PATH, FileStorage::READ);
+
+	fs["vocabulary"] >> vocabulary;
+	fs.release();
+
 	return vocabulary;
 }
 
@@ -137,7 +158,9 @@ void addDataClass(string classPath, int classId, Mat vocabulary, map<int, Mat> &
 	}
 }
 
-CvNormalBayesClassifier computeBayesClassifier(map<int, Mat> data)
+//Train methods
+
+Ptr<CvNormalBayesClassifier> computeBayesClassifier(map<int, Mat> data)
 {
 	//prepare data
 	Mat samples;
@@ -151,15 +174,116 @@ CvNormalBayesClassifier computeBayesClassifier(map<int, Mat> data)
 
 		Mat labelMat = Mat(sample.rows, 1, sample.type(), Scalar(label));
 		labels.push_back(labelMat);
-		samples.push_back(it->second);
+		samples.push_back(sample);
 	}
 
 	//train
-	CvNormalBayesClassifier classifier;
-	classifier.train(samples, labels);
-	classifier.save("../Assets/bayes.model");
+	Ptr<CvNormalBayesClassifier> classifier = new CvNormalBayesClassifier();
+	classifier->train(samples, labels);
+	classifier->save(BAYES_PATH.c_str());
 	
 	return classifier;
+}
+
+Ptr<CvSVM> computeSVMClassifier(map<int, Mat> data)
+{
+	//prepare data
+	Mat samples;
+	Mat labels;
+
+	map<int, Mat>::iterator it;
+	for (it = data.begin(); it != data.end(); it++)
+	{
+		int label = it->first;
+		Mat sample = it->second;
+
+		Mat labelMat = Mat(sample.rows, 1, sample.type(), Scalar(label));
+		labels.push_back(labelMat);
+		samples.push_back(sample);
+	}
+
+	//train
+	Ptr<CvSVM> classifier = new CvSVM();
+	classifier->train(samples, labels);
+	classifier->save(SVM_PATH.c_str());
+
+	return classifier;
+}
+
+//Test methods
+void testBayesClassifier(Ptr<CvNormalBayesClassifier> classifier, Mat vocabulary)
+{
+	string results = "id,label\n";
+
+	Ptr<FeatureDetector> detector = FeatureDetector::create(DETECTOR_TYPE);
+	Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(MATCHER_TYPE);
+	Ptr<DescriptorExtractor> extractor = DescriptorExtractor::create(EXTRACTOR_TYPE);
+
+	BOWImgDescriptorExtractor bowide(extractor, matcher);
+	bowide.setVocabulary(vocabulary);
+
+	for (int i = 1; i <= TEST_SIZE; i++)
+	{
+		Mat image = imread(TEST_PATH + to_string(i) + ".jpg", IMREAD_COLOR);
+		vector<KeyPoint> kp;
+		Mat hst;
+		detector->detect(image, kp);
+		bowide.compute(image, kp, hst);
+
+		int classId;
+
+		if (hst.rows == 0)
+		{
+			classId = 0;
+		}
+		else
+		{
+			classId = classifier->predict(hst);
+		}
+
+		results += to_string(i) + "," + to_string(classId) + "\n";
+	}
+
+	ofstream file(RESULTS_PATH);
+	file << results;
+}
+
+void testSVMClassifier(Ptr<CvSVM> classifier, Mat vocabulary)
+{
+	string results = "id,label\n";
+
+	Ptr<FeatureDetector> detector = FeatureDetector::create(DETECTOR_TYPE);
+	Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(MATCHER_TYPE);
+	Ptr<DescriptorExtractor> extractor = DescriptorExtractor::create(EXTRACTOR_TYPE);
+
+	BOWImgDescriptorExtractor bowide(extractor, matcher);
+	bowide.setVocabulary(vocabulary);
+
+	for (int i = 1; i <= TEST_SIZE; i++)
+	{
+		cout << i << endl;
+		Mat image = imread(TEST_PATH + to_string(i) + ".jpg", IMREAD_COLOR);
+		vector<KeyPoint> kp;
+		Mat hst;
+		detector->detect(image, kp);
+		bowide.compute(image, kp, hst);
+
+		int classId;
+
+		if (hst.rows == 0)
+		{
+			classId = 0;
+		}
+		else
+		{
+			classId = classifier->predict(hst);
+		}
+
+		results += to_string(i) + "," + to_string(classId) + "\n";
+	}
+
+	ofstream file(RESULTS_PATH);
+	file << results;
 }
 
 int main()
@@ -188,51 +312,18 @@ int main()
 	cout << "Training" << endl;
 	t = GetTickCount();
 	//Train with data
-	CvNormalBayesClassifier classifier = computeBayesClassifier(data);
+	//Ptr<CvNormalBayesClassifier> classifier = computeBayesClassifier(data);
+	Ptr<CvSVM> classifier = computeSVMClassifier(data);
 	//---------------
 	cout << GetTickCount() - t << "ms" << endl;
 
-	//Try
 	cout << "Testing" << endl;
-	string results = "id,label\n";
-
-	Ptr<FeatureDetector> detector = FeatureDetector::create(DETECTOR_TYPE);
-	Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(MATCHER_TYPE);
-	Ptr<DescriptorExtractor> extractor = DescriptorExtractor::create(EXTRACTOR_TYPE);
-
-	BOWImgDescriptorExtractor bowide(extractor, matcher);
-	bowide.setVocabulary(vocabulary);
-
-	for (int i = 1; i <= TEST_SIZE; i++)
-	{
-		Mat image = imread(TEST_PATH + to_string(i) + ".jpg", IMREAD_COLOR);
-		vector<KeyPoint> kp;
-		Mat hst;
-		detector->detect(image, kp);
-		bowide.compute(image, kp, hst);
-
-		int classId;
-		
-		if (hst.rows == 0)
-		{
-			classId = 0;
-		}
-		else
-		{
-			classId = classifier.predict(hst);
-		}
-
-		results += to_string(i) + "," + to_string(classId) + "\n";
-		//if (classId == CAT_CLASS) ovascoegay += ""
-		//if (classId == DOG_CLASS) cout << "dog" << endl;
-
-
-		//imshow("image", image);
-		//waitKey();
-	}
-
-	ofstream file(ASSETS_PATH + "results.csv");
-	file << results;
+	t = GetTickCount();
+	//Test classifier
+	//testBayesClassifier(classifier, vocabulary);
+	testSVMClassifier(classifier, vocabulary);
+	//--------------
+	cout << GetTickCount() - t << "ms" << endl;
 
 	//gg
 	cout << "finish" << endl;
